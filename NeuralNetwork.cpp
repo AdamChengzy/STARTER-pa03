@@ -1,6 +1,7 @@
 // includes
 #include "NeuralNetwork.hpp"
 #include "Trace.hpp"
+#include <unordered_set>
 using namespace std;
 
 
@@ -9,37 +10,37 @@ using namespace std;
 
 // STUDENT TODO: IMPLEMENT
 void NeuralNetwork::eval() {
-    //stub
+   evaluating	= true;
 }
 
 // STUDENT TODO: IMPLEMENT
 void NeuralNetwork::train() {
-    //stub
+    evaluating = false;
 }
 
 // STUDENT TODO: IMPLEMENT
 void NeuralNetwork::setLearningRate(double lr) {
-    //stub
+    learningRate= lr;
 }
 
 // STUDENT TODO: IMPLEMENT
 void NeuralNetwork::setInputNodeIds(std::vector<int> inputNodeIds) {
-    //stub
+    this->inputNodeIds= inputNodeIds;
 }
 
 // STUDENT TODO: IMPLEMENT
 void NeuralNetwork::setOutputNodeIds(std::vector<int> outputNodeIds) {
-    //stub
+    this->outputNodeIds= outputNodeIds;
 }
 
 // STUDENT TODO: IMPLEMENT
 vector<int> NeuralNetwork::getInputNodeIds() const {
-    return vector<int>(); //stub
+    return inputNodeIds;
 }
 
 // STUDENT TODO: IMPLEMENT
 vector<int> NeuralNetwork::getOutputNodeIds() const {
-    return vector<int>(); //stub
+    return outputNodeIds;
 }
 
 // STUDENT TODO: IMPLEMENT
@@ -61,11 +62,58 @@ vector<double> NeuralNetwork::predict(DataInstance instance) {
     // their value is passed forward directly.
     // Use visitPredictNode and visitPredictNeighbor to handle the neural network math
     // at each step of your traversal.
+        flush();
 
+    for (int i = 0; i < inputNodeIds.size(); i++) {
+        int id = inputNodeIds.at(i);
+        NodeInfo* node = nodes.at(id);
+        node->preActivationValue = input.at(i);
+        node->postActivationValue = input.at(i);
+    }
+
+    queue<int> q;
+    unordered_set<int> pushed;
+
+    for (int id : inputNodeIds) {
+        q.push(id);
+        pushed.insert(id);
+    }
+
+    while (!q.empty()) {
+        int levelSize = q.size();
+        vector<int> currentLevel;
+        vector<int> nextLevel;
+        unordered_set<int> nextSeen;
+
+        for (int i = 0; i < levelSize; i++) {
+            int v = q.front();
+            q.pop();
+            currentLevel.push_back(v);
+        }
+
+        for (int v : currentLevel) {
+            visitPredictNode(v);
+        }
+
+        for (int v : currentLevel) {
+            for (auto it = adjacencyList.at(v).begin(); it != adjacencyList.at(v).end(); ++it) {
+                Connection c = it->second;
+                visitPredictNeighbor(c);
+                int u = c.dest;
+                if (nextSeen.find(u) == nextSeen.end()) {
+                    nextSeen.insert(u);
+                    nextLevel.push_back(u);
+                }
+            }
+        }
+
+        for (int u : nextLevel) {
+            q.push(u);
+        }
+    }
     vector<double> output;
-    for (int i = 0; i < outputNodeIds.size(); i++) {
-        int dest = outputNodeIds.at(i);
-        NodeInfo* outputNode = nodes.at(dest);
+    for (int id : outputNodeIds) {
+        NodeInfo* outputNode = nodes.at(id);
         output.push_back(outputNode->postActivationValue);
     }
 
@@ -81,7 +129,14 @@ vector<double> NeuralNetwork::predict(DataInstance instance) {
 }
 // STUDENT TODO: IMPLEMENT
 bool NeuralNetwork::contribute(double y, double p) {
+     contributions.clear();
 
+    for (int id : inputNodeIds) {
+        contribute(id, y, p);
+    }
+
+
+    return true;
     // DFT implementation goes here.
     // This function initiates the recursion by calling the recursive helper
     // starting from each input layer node.
@@ -90,29 +145,50 @@ bool NeuralNetwork::contribute(double y, double p) {
     // The contributions map acts as your "visited" set and also stores each node's
     // computed contribution so it is not recomputed if reached by multiple paths.
 
-
-    flush();
-
-    return true;
 }
 // STUDENT TODO: IMPLEMENT
 double NeuralNetwork::contribute(int nodeId, const double& y, const double& p) {
-    visitContributeStart(nodeId); // don't remove this line, used for visualization
-    // incomingContribution: the error signal returned by a recursive call on a neighbor.
-    double incomingContribution = 0;
-    // outgoingContribution: built up from this node's neighbors, then scaled by
-    // this node's activation derivative before being returned to the previous layer.
-    double outgoingContribution = 0;
-    NodeInfo* currNode = nodes.at(nodeId);
 
-    // If this node is already in the contributions map, return its stored value immediately.
+     visitContributeStart(nodeId);
+
+    if (contributions.find(nodeId) != contributions.end()) {
+        return contributions[nodeId];
+    }
+
+    double incomingContribution = 0;
+    double outgoingContribution = 0;
 
     if (adjacencyList.at(nodeId).empty()) {
+        outgoingContribution = -1 * ((y - p) / (p * (1 - p)));
+    } else {
+        for (auto& kv : adjacencyList.at(nodeId)) {
+            Connection& c = kv.second;
+            incomingContribution = contribute(c.dest, y, p);
+            visitContributeNeighbor(c, incomingContribution, outgoingContribution);
+        }
+    }
+
+    bool isInputNode = false;
+    for (int id : inputNodeIds) {
+        if (id == nodeId) {
+            isInputNode = true;
+            break;
+        }
+    }
+
+    if (!isInputNode) {
+        visitContributeNode(nodeId, outgoingContribution);
+    }
+
+    contributions[nodeId] = outgoingContribution;
+     // don't remove this line, used for visualization
+    // incomingContribution: the error signal returned by a recursive call on a neighbor.
+    // outgoingContribution: built up from this node's neighbors, then scaled by
+    // this node's activation derivative before being returned to the previous layer.
+    // If this node is already in the contributions map, return its stored value immediately
         // Base case: output node (no outgoing connections).
         // Seeds the backward pass with the initial error signal.
-        // You do not need to understand this derivation.
-        outgoingContribution = -1 * ((y - p) / (p * (1 - p)));
-    }
+        // You do not need to understand this derivation
 
     // Before returning, store outgoingContribution in the contributions map.
 
@@ -121,7 +197,19 @@ double NeuralNetwork::contribute(int nodeId, const double& y, const double& p) {
 // STUDENT TODO: IMPLEMENT
 bool NeuralNetwork::update() {
     // apply the derivative contributions
+    for (int i = 0; i < nodes.size(); i++) {
+        if (nodes[i] != nullptr) {
+            nodes[i]->bias = nodes[i]->bias - (learningRate * nodes[i]->delta);
+            nodes[i]->delta = 0;
+        }
+    }
 
+    for (int i = 0; i < adjacencyList.size(); i++) {
+        for (auto it = adjacencyList[i].begin(); it != adjacencyList[i].end(); ++it) {
+            it->second.weight = it->second.weight - (learningRate * it->second.delta);
+            it->second.delta = 0;
+        }
+    }
     // traverse the graph in anyway you want. 
     // Each node has a delta term 
     // Each connection has a delta term
